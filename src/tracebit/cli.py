@@ -10,6 +10,7 @@ import requests
 from .api import TracebitClient, TracebitError
 from .aws import deploy_aws_credentials, remove_aws_credentials, profile_exists
 from .config import load_token, save_token
+from .ssh import deploy_ssh_key, remove_ssh_key, key_exists, trigger_ssh
 from .state import (
     save_credential,
     load_credentials,
@@ -187,6 +188,140 @@ def cmd_deploy_aws(args):
         print(f"  Expires:    {aws['awsExpiration']}")
 
 
+def cmd_deploy_ssh(args):
+    """Issue and deploy a canary SSH private key."""
+    client = _get_client(args)
+    name = args.name or socket.gethostname()
+    labels = _parse_labels(args.labels)
+
+    # get default key filename from API if not specified
+    key_filename = args.key_file
+    if not key_filename:
+        try:
+            meta = client.generate_metadata()
+            key_filename = meta.get("sshKeyFileName") or "id_backup"
+        except Exception:
+            key_filename = "id_backup"
+
+    if key_exists(key_filename) and not args.force:
+        from .ssh import key_exists as ke
+        from .state import load_credentials as lc
+        ours = any(
+            c.get("key_filename") == key_filename
+            for c in lc()
+            if c["type"] == "ssh"
+        )
+        if ours:
+            print(
+                f"Error: SSH key '{key_filename}' already has a canary deployed. "
+                f"Use --force to replace it, or 'tracebit refresh' to renew.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"Error: ~/.ssh/{key_filename} already exists and is NOT a known canary. "
+                f"Use --key-file to choose a different name, or --force if you're sure.",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    if args.force:
+        existing = [
+            c for c in load_credentials()
+            if c["type"] == "ssh" and c.get("key_filename") == key_filename
+        ]
+        for old in existing:
+            try:
+                client.remove_credentials(old["name"], "ssh")
+                _log(args, f"Expired previous SSH canary '{old['name']}' on Tracebit.")
+            except (TracebitError, requests.RequestException):
+                pass
+            remove_credential(old["name"], "ssh")
+
+    _log(args, f"Issuing SSH canary key (name={name}, file=~/.ssh/{key_filename})...")
+    try:
+        result = client.issue_credentials(
+            name=name, types=["ssh"], source="tracebit-python",
+            source_type="endpoint", labels=labels,
+        )
+    except (TracebitError, requests.RequestException) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    ssh = result.get("ssh")
+    if not ssh:
+        print("Error: No SSH credentials in response.", file=sys.stderr)
+        sys.exit(1)
+
+    key_path = deploy_ssh_key(key_filename, ssh["sshPrivateKey"])
+    _log(args, f"Private key written to {key_path}")
+
+    try:
+        client.confirm_credentials(ssh["sshConfirmationId"])
+        _log(args, "Deployment confirmed with Tracebit.")
+    except (TracebitError, requests.RequestException) as e:
+        print(f"Warning: Could not confirm deployment: {e}", file=sys.stderr)
+
+    save_credential({
+        "name": name,
+        "type": "ssh",
+        "key_filename": key_filename,
+        "ssh_ip": ssh.get("sshIp", ""),
+        "expiration": ssh.get("sshExpiration", ""),
+        "confirmation_id": ssh["sshConfirmationId"],
+        "labels": labels,
+    })
+
+    if args.json_output:
+        print(json.dumps({
+            "key_file": str(key_path),
+            "ssh_ip": ssh.get("sshIp", ""),
+            "expiration": ssh.get("sshExpiration", ""),
+        }, indent=2))
+    elif not _quiet(args):
+        print(f"\nSSH canary deployed successfully!")
+        print(f"  Key file:   {key_path}")
+        print(f"  SSH IP:     {ssh.get('sshIp', 'n/a')}")
+        print(f"  Expires:    {ssh.get('sshExpiration', 'n/a')}")
+
+
+def cmd_trigger_ssh(args):
+    """Test-fire an SSH canary by connecting to Tracebit's honeypot."""
+    creds = load_credentials()
+    ssh_creds = [c for c in creds if c["type"] == "ssh"]
+
+    if not ssh_creds:
+        print("No SSH canary credentials deployed.", file=sys.stderr)
+        sys.exit(1)
+
+    if args.name:
+        match = [c for c in ssh_creds if c["name"] == args.name]
+        if not match:
+            print(f"No SSH credential found with name '{args.name}'.", file=sys.stderr)
+            sys.exit(1)
+        cred = match[0]
+    else:
+        cred = ssh_creds[0]
+
+    key_filename = cred["key_filename"]
+    ssh_ip = cred.get("ssh_ip", "")
+    if not ssh_ip:
+        print("Error: No SSH IP stored for this canary.", file=sys.stderr)
+        sys.exit(1)
+
+    _log(args, f"Triggering SSH canary (key=~/.ssh/{key_filename}, ip={ssh_ip})...")
+    try:
+        trigger_ssh(key_filename, ssh_ip)
+        # SSH to a honeypot always fails auth — the alert fires server-side
+        _log(args, "SSH connection attempted — canary should fire on Tracebit's side.")
+    except FileNotFoundError:
+        print("Error: 'ssh' not found in PATH.", file=sys.stderr)
+        sys.exit(1)
+    except subprocess.TimeoutExpired:
+        print("Error: SSH connection timed out.", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_refresh(args):
     """Refresh credentials expiring within the given threshold."""
     client = _get_client(args)
@@ -199,21 +334,23 @@ def cmd_refresh(args):
 
     failures = 0
     for cred in expiring:
-        if cred["type"] != "aws":
-            _log(args, f"Skipping non-AWS credential: {cred['name']}")
+        ctype = cred["type"]
+        if ctype not in ("aws", "ssh"):
+            _log(args, f"Skipping unsupported credential type: {cred['name']} ({ctype})")
             continue
 
         exp = cred.get("expiration", "")
         try:
             exp_dt = datetime.fromisoformat(exp.replace("Z", "+00:00"))
             remaining = (exp_dt - datetime.now(timezone.utc)).total_seconds() / 3600
-            _log(args, f"Refreshing AWS credential '{cred['name']}' "
+            _log(args, f"Refreshing {ctype.upper()} credential '{cred['name']}' "
                        f"(expires in {remaining:.1f}h, threshold {hours}h)...")
         except (ValueError, TypeError):
-            _log(args, f"Refreshing AWS credential '{cred['name']}'...")
+            _log(args, f"Refreshing {ctype.upper()} credential '{cred['name']}'...")
+
         try:
             result = client.issue_credentials(
-                name=cred["name"], types=["aws"], source="tracebit-python",
+                name=cred["name"], types=[ctype], source="tracebit-python",
                 source_type="endpoint", labels=cred.get("labels", {}),
             )
         except (TracebitError, requests.RequestException) as e:
@@ -221,37 +358,56 @@ def cmd_refresh(args):
             failures += 1
             continue
 
-        aws = result.get("aws")
-        if not aws:
-            print(f"Error: No AWS credentials in refresh response for {cred['name']}.",
-                  file=sys.stderr)
-            failures += 1
-            continue
+        if ctype == "aws":
+            aws = result.get("aws")
+            if not aws:
+                print(f"Error: No AWS credentials in refresh response for {cred['name']}.",
+                      file=sys.stderr)
+                failures += 1
+                continue
+            deploy_aws_credentials(
+                profile=cred["profile"],
+                region=cred["region"],
+                access_key_id=aws["awsAccessKeyId"],
+                secret_access_key=aws["awsSecretAccessKey"],
+                session_token=aws["awsSessionToken"],
+            )
+            try:
+                client.confirm_credentials(aws["awsConfirmationId"])
+            except (TracebitError, requests.RequestException) as e:
+                print(f"Warning: Could not confirm refresh for {cred['name']}: {e}",
+                      file=sys.stderr)
+            save_credential({
+                "name": cred["name"], "type": "aws",
+                "profile": cred["profile"], "region": cred["region"],
+                "expiration": aws["awsExpiration"],
+                "confirmation_id": aws["awsConfirmationId"],
+                "labels": cred.get("labels", {}),
+            })
+            _log(args, f"  Refreshed. New expiration: {aws['awsExpiration']}")
 
-        deploy_aws_credentials(
-            profile=cred["profile"],
-            region=cred["region"],
-            access_key_id=aws["awsAccessKeyId"],
-            secret_access_key=aws["awsSecretAccessKey"],
-            session_token=aws["awsSessionToken"],
-        )
-
-        try:
-            client.confirm_credentials(aws["awsConfirmationId"])
-        except (TracebitError, requests.RequestException) as e:
-            print(f"Warning: Could not confirm refresh for {cred['name']}: {e}",
-                  file=sys.stderr)
-
-        save_credential({
-            "name": cred["name"],
-            "type": "aws",
-            "profile": cred["profile"],
-            "region": cred["region"],
-            "expiration": aws["awsExpiration"],
-            "confirmation_id": aws["awsConfirmationId"],
-            "labels": cred.get("labels", {}),
-        })
-        _log(args, f"  Refreshed. New expiration: {aws['awsExpiration']}")
+        elif ctype == "ssh":
+            ssh = result.get("ssh")
+            if not ssh:
+                print(f"Error: No SSH credentials in refresh response for {cred['name']}.",
+                      file=sys.stderr)
+                failures += 1
+                continue
+            deploy_ssh_key(cred["key_filename"], ssh["sshPrivateKey"])
+            try:
+                client.confirm_credentials(ssh["sshConfirmationId"])
+            except (TracebitError, requests.RequestException) as e:
+                print(f"Warning: Could not confirm refresh for {cred['name']}: {e}",
+                      file=sys.stderr)
+            save_credential({
+                "name": cred["name"], "type": "ssh",
+                "key_filename": cred["key_filename"],
+                "ssh_ip": ssh.get("sshIp", cred.get("ssh_ip", "")),
+                "expiration": ssh.get("sshExpiration", ""),
+                "confirmation_id": ssh["sshConfirmationId"],
+                "labels": cred.get("labels", {}),
+            })
+            _log(args, f"  Refreshed. New expiration: {ssh.get('sshExpiration', 'n/a')}")
 
     if failures:
         print(f"\n{failures} credential(s) failed to refresh.", file=sys.stderr)
@@ -335,6 +491,9 @@ def cmd_show(args):
         if c["type"] == "aws":
             _log(args, f"  Profile:    {c.get('profile', 'n/a')}")
             _log(args, f"  Region:     {c.get('region', 'n/a')}")
+        elif c["type"] == "ssh":
+            _log(args, f"  Key file:   ~/.ssh/{c.get('key_filename', 'n/a')}")
+            _log(args, f"  SSH IP:     {c.get('ssh_ip', 'n/a')}")
         _log(args, f"  Expires:    {exp_str}{status}")
         if c.get("labels"):
             _log(args, f"  Labels:     {c['labels']}")
@@ -366,6 +525,9 @@ def cmd_remove(args):
         if c["type"] == "aws":
             remove_aws_credentials(c.get("profile", ""))
             _log(args, f"Removed AWS profile '{c.get('profile')}' from ~/.aws/")
+        elif c["type"] == "ssh":
+            remove_ssh_key(c.get("key_filename", ""))
+            _log(args, f"Removed SSH key '~/.ssh/{c.get('key_filename')}' from disk")
         remove_credential(c["name"], c["type"])
         _log(args, f"Removed credential '{c['name']}' ({c['type']}) from state.")
 
@@ -407,6 +569,16 @@ def main():
     p_aws.add_argument("--force", action="store_true",
                         help="Overwrite existing profile")
 
+    p_ssh = deploy_sub.add_parser("ssh", help="Deploy SSH canary key")
+    p_ssh.add_argument("--name", help="Credential name for Tracebit dashboard (default: hostname)")
+    p_ssh.add_argument("--key-file", dest="key_file",
+                       help="Key filename in ~/.ssh/ — pick something realistic "
+                            "e.g. 'id_backup', 'id_rsa_old' (default: from API)")
+    p_ssh.add_argument("--labels", nargs="*", metavar="KEY=VALUE",
+                       help="Labels as key=value pairs")
+    p_ssh.add_argument("--force", action="store_true",
+                       help="Overwrite existing key file")
+
     # refresh
     p_refresh = sub.add_parser("refresh", help="Refresh expiring credentials")
     p_refresh.add_argument("--hours", type=float, default=2,
@@ -417,6 +589,9 @@ def main():
     trigger_sub = p_trigger.add_subparsers(dest="trigger_type")
     p_trig_aws = trigger_sub.add_parser("aws", help="Trigger AWS canary")
     p_trig_aws.add_argument("--name", help="Credential name to trigger")
+
+    p_trig_ssh = trigger_sub.add_parser("ssh", help="Trigger SSH canary")
+    p_trig_ssh.add_argument("--name", help="Credential name to trigger")
 
     # show
     sub.add_parser("show", help="Show deployed credentials")
@@ -439,6 +614,8 @@ def main():
             sys.exit(1)
         if args.deploy_type == "aws":
             cmd_deploy_aws(args)
+        elif args.deploy_type == "ssh":
+            cmd_deploy_ssh(args)
     elif args.command == "refresh":
         cmd_refresh(args)
     elif args.command == "trigger":
@@ -447,6 +624,8 @@ def main():
             sys.exit(1)
         if args.trigger_type == "aws":
             cmd_trigger_aws(args)
+        elif args.trigger_type == "ssh":
+            cmd_trigger_ssh(args)
     elif args.command == "show":
         cmd_show(args)
     elif args.command == "remove":
