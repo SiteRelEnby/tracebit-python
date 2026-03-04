@@ -35,7 +35,7 @@ class TracebitClient:
                           source_type="endpoint", labels=None):
         body = {
             "name": name,
-            "types": types,
+            "credentialTypes": types,
             "source": source,
             "sourceType": source_type,
         }

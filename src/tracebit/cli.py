@@ -18,6 +18,15 @@ from .state import (
 )
 
 
+def _quiet(args):
+    return getattr(args, "quiet", False)
+
+
+def _log(args, msg):
+    if not _quiet(args):
+        print(msg)
+
+
 def _get_client(args):
     token = getattr(args, "token", None) or load_token()
     if not token:
@@ -60,7 +69,7 @@ def cmd_configure(args):
         sys.exit(1)
 
     save_token(token)
-    print("Token saved to ~/.config/tracebit/token")
+    _log(args, "Token saved to ~/.config/tracebit/token")
 
 
 def cmd_deploy_aws(args):
@@ -114,13 +123,13 @@ def cmd_deploy_aws(args):
         for old in existing:
             try:
                 client.remove_credentials(old["name"], "aws")
-                print(f"Expired previous canary '{old['name']}' on Tracebit.")
+                _log(args, f"Expired previous canary '{old['name']}' on Tracebit.")
             except TracebitError:
                 pass
             remove_credential(old["name"], "aws")
 
     # issue credentials
-    print(f"Issuing AWS canary credentials (name={name}, profile={profile})...")
+    _log(args, f"Issuing AWS canary credentials (name={name}, profile={profile})...")
     try:
         result = client.issue_credentials(
             name=name, types=["aws"], source="tracebit-python",
@@ -143,12 +152,12 @@ def cmd_deploy_aws(args):
         secret_access_key=aws["awsSecretAccessKey"],
         session_token=aws["awsSessionToken"],
     )
-    print(f"Credentials written to ~/.aws/credentials [{profile}]")
+    _log(args, f"Credentials written to ~/.aws/credentials [{profile}]")
 
     # confirm deployment
     try:
         client.confirm_credentials(aws["awsConfirmationId"])
-        print("Deployment confirmed with Tracebit.")
+        _log(args, "Deployment confirmed with Tracebit.")
     except TracebitError as e:
         print(f"Warning: Could not confirm deployment: {e}", file=sys.stderr)
 
@@ -170,7 +179,7 @@ def cmd_deploy_aws(args):
             "access_key_id": aws["awsAccessKeyId"],
             "expiration": aws["awsExpiration"],
         }, indent=2))
-    else:
+    elif not _quiet(args):
         print(f"\nCanary deployed successfully!")
         print(f"  Profile:    {profile}")
         print(f"  Region:     {region}")
@@ -185,23 +194,23 @@ def cmd_refresh(args):
     expiring = get_expiring_credentials(hours=hours)
 
     if not expiring:
-        print("No credentials need refreshing.")
+        _log(args, "No credentials need refreshing.")
         return
 
     failures = 0
     for cred in expiring:
         if cred["type"] != "aws":
-            print(f"Skipping non-AWS credential: {cred['name']}")
+            _log(args, f"Skipping non-AWS credential: {cred['name']}")
             continue
 
         exp = cred.get("expiration", "")
         try:
             exp_dt = datetime.fromisoformat(exp.replace("Z", "+00:00"))
             remaining = (exp_dt - datetime.now(timezone.utc)).total_seconds() / 3600
-            print(f"Refreshing AWS credential '{cred['name']}' "
-                  f"(expires in {remaining:.1f}h, threshold {hours}h)...")
+            _log(args, f"Refreshing AWS credential '{cred['name']}' "
+                       f"(expires in {remaining:.1f}h, threshold {hours}h)...")
         except (ValueError, TypeError):
-            print(f"Refreshing AWS credential '{cred['name']}'...")
+            _log(args, f"Refreshing AWS credential '{cred['name']}'...")
         try:
             result = client.issue_credentials(
                 name=cred["name"], types=["aws"], source="tracebit-python",
@@ -242,7 +251,7 @@ def cmd_refresh(args):
             "confirmation_id": aws["awsConfirmationId"],
             "labels": cred.get("labels", {}),
         })
-        print(f"  Refreshed. New expiration: {aws['awsExpiration']}")
+        _log(args, f"  Refreshed. New expiration: {aws['awsExpiration']}")
 
     if failures:
         print(f"\n{failures} credential(s) failed to refresh.", file=sys.stderr)
@@ -269,7 +278,7 @@ def cmd_trigger_aws(args):
         cred = aws_creds[0]
 
     profile = cred["profile"]
-    print(f"Triggering canary credential (profile={profile})...")
+    _log(args, f"Triggering canary credential (profile={profile})...")
 
     try:
         result = subprocess.run(
@@ -277,12 +286,12 @@ def cmd_trigger_aws(args):
             capture_output=True, text=True, timeout=10,
         )
         if result.returncode == 0 and "arn:aws:sts::" in result.stdout:
-            print("Canary triggered successfully!")
-            print(result.stdout.strip())
+            _log(args, "Canary triggered successfully!")
+            _log(args, result.stdout.strip())
         else:
-            print("Trigger command ran but output was unexpected:")
+            _log(args, "Trigger command ran but output was unexpected:")
             if result.stdout:
-                print(result.stdout.strip())
+                _log(args, result.stdout.strip())
             if result.stderr:
                 print(result.stderr.strip(), file=sys.stderr)
     except FileNotFoundError:
@@ -300,7 +309,7 @@ def cmd_show(args):
     """Display deployed canary credentials."""
     creds = load_credentials()
     if not creds:
-        print("No canary credentials deployed.")
+        _log(args, "No canary credentials deployed.")
         return
 
     if args.json_output:
@@ -321,15 +330,15 @@ def cmd_show(args):
             except ValueError:
                 pass
 
-        print(f"  Name:       {c['name']}")
-        print(f"  Type:       {c['type']}")
+        _log(args, f"  Name:       {c['name']}")
+        _log(args, f"  Type:       {c['type']}")
         if c["type"] == "aws":
-            print(f"  Profile:    {c.get('profile', 'n/a')}")
-            print(f"  Region:     {c.get('region', 'n/a')}")
-        print(f"  Expires:    {exp_str}{status}")
+            _log(args, f"  Profile:    {c.get('profile', 'n/a')}")
+            _log(args, f"  Region:     {c.get('region', 'n/a')}")
+        _log(args, f"  Expires:    {exp_str}{status}")
         if c.get("labels"):
-            print(f"  Labels:     {c['labels']}")
-        print()
+            _log(args, f"  Labels:     {c['labels']}")
+        _log(args, "")
 
 
 def cmd_remove(args):
@@ -343,22 +352,22 @@ def cmd_remove(args):
         matches = creds
 
     if not matches:
-        print("No matching credentials found.")
+        _log(args, "No matching credentials found.")
         return
 
     for c in matches:
         # expire server-side
         try:
             client.remove_credentials(c["name"], c["type"])
-            print(f"Expired '{c['name']}' ({c['type']}) on Tracebit.")
+            _log(args, f"Expired '{c['name']}' ({c['type']}) on Tracebit.")
         except TracebitError as e:
             print(f"Warning: Could not expire server-side: {e}", file=sys.stderr)
 
         if c["type"] == "aws":
             remove_aws_credentials(c.get("profile", ""))
-            print(f"Removed AWS profile '{c.get('profile')}' from ~/.aws/")
+            _log(args, f"Removed AWS profile '{c.get('profile')}' from ~/.aws/")
         remove_credential(c["name"], c["type"])
-        print(f"Removed credential '{c['name']}' ({c['type']}) from state.")
+        _log(args, f"Removed credential '{c['name']}' ({c['type']}) from state.")
 
 
 def main():
@@ -374,6 +383,8 @@ def main():
     parser.add_argument("--base-url", help="Override Tracebit API base URL")
     parser.add_argument("--json", dest="json_output", action="store_true",
                         help="Output in JSON format where supported")
+    parser.add_argument("-q", "--quiet", action="store_true",
+                        help="Suppress informational output (errors still print to stderr)")
 
     sub = parser.add_subparsers(dest="command")
 
