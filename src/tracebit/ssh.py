@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 SSH_DIR = Path.home() / ".ssh"
+SSH_CONFIG = SSH_DIR / "config"
 
 
 def _ensure_ssh_dir():
@@ -39,6 +40,56 @@ def remove_ssh_key(key_filename):
 def key_exists(key_filename):
     """Check if a key file already exists."""
     return (SSH_DIR / key_filename).exists()
+
+
+def _remove_host_block(text, ssh_host):
+    """Remove a Host block matching ssh_host from ssh config text."""
+    lines = text.splitlines(keepends=True)
+    result = []
+    in_block = False
+    for line in lines:
+        parts = line.strip().split()
+        if parts and parts[0].lower() == "host":
+            in_block = len(parts) > 1 and parts[1] == ssh_host
+            if in_block:
+                continue
+        if not in_block:
+            result.append(line)
+    return "".join(result)
+
+
+def write_ssh_config(ssh_host, key_path, ssh_ip, config_file=None):
+    """Append a Host block to an ssh config file for the canary."""
+    if config_file is None:
+        config_file = SSH_CONFIG
+    config_file = Path(config_file)
+
+    existing = config_file.read_text() if config_file.exists() else ""
+    cleaned = _remove_host_block(existing, ssh_host).rstrip("\n")
+
+    lines = [f"Host {ssh_host}"]
+    if str(ssh_host) != str(ssh_ip):
+        lines.append(f"    HostName {ssh_ip}")
+    lines.append(f"    IdentityFile {key_path}")
+    lines.append(f"    PasswordAuthentication no")
+    new_block = "\n".join(lines) + "\n"
+
+    content = (cleaned + "\n\n" + new_block) if cleaned else new_block
+    config_file.write_text(content)
+    os.chmod(config_file, 0o600)
+
+
+def remove_ssh_config(ssh_host, config_file=None):
+    """Remove a Host block from an ssh config file."""
+    if config_file is None:
+        config_file = SSH_CONFIG
+    config_file = Path(config_file)
+    if not config_file.exists():
+        return
+    text = config_file.read_text()
+    cleaned = _remove_host_block(text, ssh_host).rstrip("\n")
+    config_file.write_text(cleaned + "\n" if cleaned else "")
+    os.chmod(config_file, 0o600)
 
 
 def trigger_ssh(key_filename, ssh_ip):

@@ -17,7 +17,10 @@ import requests
 from .api import TracebitClient, TracebitError
 from .aws import deploy_aws_credentials, remove_aws_credentials, profile_exists
 from .config import load_token, save_token
-from .ssh import deploy_ssh_key, remove_ssh_key, key_exists, trigger_ssh
+from .ssh import (
+    deploy_ssh_key, remove_ssh_key, key_exists, trigger_ssh,
+    write_ssh_config, remove_ssh_config,
+)
 from .state import (
     save_credential,
     load_credentials,
@@ -260,8 +263,16 @@ def cmd_deploy_ssh(args):
         print("Error: No SSH credentials in response.", file=sys.stderr)
         sys.exit(1)
 
+    ssh_ip = ssh.get("sshIp", "")
+    ssh_host = args.ssh_host or ssh_ip
+    config_file = args.ssh_config_file or None
+
     key_path = deploy_ssh_key(key_filename, ssh["sshPrivateKey"])
     _log(args, f"Private key written to {key_path}")
+
+    if ssh_host:
+        write_ssh_config(ssh_host, key_path, ssh_ip, config_file)
+        _log(args, f"SSH config entry written for host '{ssh_host}'")
 
     try:
         client.confirm_credentials(ssh["sshConfirmationId"])
@@ -273,7 +284,9 @@ def cmd_deploy_ssh(args):
         "name": name,
         "type": "ssh",
         "key_filename": key_filename,
-        "ssh_ip": ssh.get("sshIp", ""),
+        "ssh_host": ssh_host,
+        "ssh_config_file": config_file,
+        "ssh_ip": ssh_ip,
         "expiration": ssh.get("sshExpiration", ""),
         "confirmation_id": ssh["sshConfirmationId"],
         "labels": labels,
@@ -282,13 +295,15 @@ def cmd_deploy_ssh(args):
     if args.json_output:
         print(json.dumps({
             "key_file": str(key_path),
-            "ssh_ip": ssh.get("sshIp", ""),
+            "ssh_host": ssh_host,
+            "ssh_ip": ssh_ip,
             "expiration": ssh.get("sshExpiration", ""),
         }, indent=2))
     elif not _quiet(args):
         print(f"\nSSH canary deployed successfully!")
         print(f"  Key file:   {key_path}")
-        print(f"  SSH IP:     {ssh.get('sshIp', 'n/a')}")
+        print(f"  SSH host:   {ssh_host}")
+        print(f"  SSH IP:     {ssh_ip or 'n/a'}")
         print(f"  Expires:    {ssh.get('sshExpiration', 'n/a')}")
 
 
@@ -400,7 +415,12 @@ def cmd_refresh(args):
                       file=sys.stderr)
                 failures += 1
                 continue
-            deploy_ssh_key(cred["key_filename"], ssh["sshPrivateKey"])
+            new_ip = ssh.get("sshIp", cred.get("ssh_ip", ""))
+            ssh_host = cred.get("ssh_host", "")
+            config_file = cred.get("ssh_config_file")
+            key_path = deploy_ssh_key(cred["key_filename"], ssh["sshPrivateKey"])
+            if ssh_host:
+                write_ssh_config(ssh_host, key_path, new_ip, config_file)
             try:
                 client.confirm_credentials(ssh["sshConfirmationId"])
             except (TracebitError, requests.RequestException) as e:
@@ -409,7 +429,9 @@ def cmd_refresh(args):
             save_credential({
                 "name": cred["name"], "type": "ssh",
                 "key_filename": cred["key_filename"],
-                "ssh_ip": ssh.get("sshIp", cred.get("ssh_ip", "")),
+                "ssh_host": ssh_host,
+                "ssh_config_file": config_file,
+                "ssh_ip": new_ip,
                 "expiration": ssh.get("sshExpiration", ""),
                 "confirmation_id": ssh["sshConfirmationId"],
                 "labels": cred.get("labels", {}),
@@ -500,6 +522,8 @@ def cmd_show(args):
             _log(args, f"  Region:     {c.get('region', 'n/a')}")
         elif c["type"] == "ssh":
             _log(args, f"  Key file:   ~/.ssh/{c.get('key_filename', 'n/a')}")
+            if c.get("ssh_host"):
+                _log(args, f"  SSH host:   {c['ssh_host']}")
             _log(args, f"  SSH IP:     {c.get('ssh_ip', 'n/a')}")
         _log(args, f"  Expires:    {exp_str}{status}")
         if c.get("labels"):
@@ -535,6 +559,9 @@ def cmd_remove(args):
         elif c["type"] == "ssh":
             remove_ssh_key(c.get("key_filename", ""))
             _log(args, f"Removed SSH key '~/.ssh/{c.get('key_filename')}' from disk")
+            if c.get("ssh_host"):
+                remove_ssh_config(c["ssh_host"], c.get("ssh_config_file"))
+                _log(args, f"Removed SSH config entry for host '{c['ssh_host']}'")
         remove_credential(c["name"], c["type"])
         _log(args, f"Removed credential '{c['name']}' ({c['type']}) from state.")
 
@@ -581,6 +608,12 @@ def main():
     p_ssh.add_argument("--key-file", dest="key_file",
                        help="Key filename in ~/.ssh/ — pick something realistic "
                             "e.g. 'id_backup', 'id_rsa_old' (default: from API)")
+    p_ssh.add_argument("--ssh-host", dest="ssh_host", metavar="HOSTNAME",
+                       help="Hostname alias for ~/.ssh/config — pick something believable "
+                            "e.g. 'backup-server.internal', 'git.prod' (default: use IP directly)")
+    p_ssh.add_argument("--ssh-config-file", dest="ssh_config_file", metavar="PATH",
+                       help="Path to ssh config file to write Host entry into "
+                            "(default: ~/.ssh/config)")
     p_ssh.add_argument("--labels", nargs="*", metavar="KEY=VALUE",
                        help="Labels as key=value pairs")
     p_ssh.add_argument("--force", action="store_true",

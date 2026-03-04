@@ -77,6 +77,86 @@ def test_correct_ssh_dir_no_warning(capsys):
     assert capsys.readouterr().err == ""
 
 
+def cfg(tmp_path):
+    """Helper: path to a temp ssh config file."""
+    return tmp_path / ".ssh" / "config"
+
+
+def test_write_config_creates_host_block(tmp_path):
+    cf = cfg(tmp_path)
+    cf.parent.mkdir(parents=True)
+    ssh_mod.write_ssh_config("backup-server.internal", "/home/user/.ssh/id_backup",
+                             "1.2.3.4", config_file=cf)
+    text = cf.read_text()
+    assert "Host backup-server.internal" in text
+    assert "HostName 1.2.3.4" in text
+    assert "IdentityFile /home/user/.ssh/id_backup" in text
+    assert "PasswordAuthentication no" in text
+
+
+def test_write_config_ip_as_host_omits_hostname(tmp_path):
+    cf = cfg(tmp_path)
+    cf.parent.mkdir(parents=True)
+    ssh_mod.write_ssh_config("1.2.3.4", "/home/user/.ssh/id_backup", "1.2.3.4", config_file=cf)
+    text = cf.read_text()
+    assert "Host 1.2.3.4" in text
+    assert "HostName" not in text
+
+
+def test_write_config_preserves_existing_blocks(tmp_path):
+    cf = cfg(tmp_path)
+    cf.parent.mkdir(parents=True)
+    cf.write_text("Host other-server\n    HostName 9.9.9.9\n    User ubuntu\n")
+    ssh_mod.write_ssh_config("backup-server.internal", "/home/user/.ssh/id_backup",
+                             "1.2.3.4", config_file=cf)
+    text = cf.read_text()
+    assert "Host other-server" in text
+    assert "Host backup-server.internal" in text
+
+
+def test_write_config_replaces_existing_entry(tmp_path):
+    cf = cfg(tmp_path)
+    cf.parent.mkdir(parents=True)
+    ssh_mod.write_ssh_config("backup-server.internal", "/old/key", "1.1.1.1", config_file=cf)
+    ssh_mod.write_ssh_config("backup-server.internal", "/new/key", "2.2.2.2", config_file=cf)
+    text = cf.read_text()
+    assert text.count("Host backup-server.internal") == 1
+    assert "2.2.2.2" in text
+    assert "1.1.1.1" not in text
+
+
+def test_write_config_file_permissions(tmp_path):
+    cf = cfg(tmp_path)
+    cf.parent.mkdir(parents=True)
+    ssh_mod.write_ssh_config("backup-server.internal", "/home/user/.ssh/id_backup",
+                             "1.2.3.4", config_file=cf)
+    assert oct(cf.stat().st_mode)[-3:] == "600"
+
+
+def test_remove_config_removes_block(tmp_path):
+    cf = cfg(tmp_path)
+    cf.parent.mkdir(parents=True)
+    ssh_mod.write_ssh_config("backup-server.internal", "/home/user/.ssh/id_backup",
+                             "1.2.3.4", config_file=cf)
+    ssh_mod.remove_ssh_config("backup-server.internal", config_file=cf)
+    assert "backup-server.internal" not in cf.read_text()
+
+
+def test_remove_config_leaves_other_blocks(tmp_path):
+    cf = cfg(tmp_path)
+    cf.parent.mkdir(parents=True)
+    cf.write_text("Host other-server\n    HostName 9.9.9.9\n")
+    ssh_mod.write_ssh_config("backup-server.internal", "/home/user/.ssh/id_backup",
+                             "1.2.3.4", config_file=cf)
+    ssh_mod.remove_ssh_config("backup-server.internal", config_file=cf)
+    assert "other-server" in cf.read_text()
+
+
+def test_remove_config_nonexistent_file_is_safe(tmp_path):
+    cf = tmp_path / "no-such-config"
+    ssh_mod.remove_ssh_config("backup-server.internal", config_file=cf)  # should not raise
+
+
 def test_trigger_ssh_runs_subprocess(monkeypatch):
     ssh_mod.deploy_ssh_key("id_backup", FAKE_KEY_B64)
 
