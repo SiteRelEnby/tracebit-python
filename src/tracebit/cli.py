@@ -5,6 +5,8 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
+import requests
+
 from .api import TracebitClient, TracebitError
 from .aws import deploy_aws_credentials, remove_aws_credentials, profile_exists
 from .config import load_token, save_token
@@ -103,6 +105,20 @@ def cmd_deploy_aws(args):
             )
         sys.exit(1)
 
+    # if --force and there's an existing canary for this profile, expire it first
+    if args.force:
+        existing = [
+            c for c in load_credentials()
+            if c["type"] == "aws" and c.get("profile") == profile
+        ]
+        for old in existing:
+            try:
+                client.remove_credentials(old["name"], "aws")
+                print(f"Expired previous canary '{old['name']}' on Tracebit.")
+            except TracebitError:
+                pass
+            remove_credential(old["name"], "aws")
+
     # issue credentials
     print(f"Issuing AWS canary credentials (name={name}, profile={profile})...")
     try:
@@ -163,14 +179,16 @@ def cmd_deploy_aws(args):
 
 
 def cmd_refresh(args):
-    """Refresh credentials expiring within 2 hours."""
+    """Refresh credentials expiring within the given threshold."""
     client = _get_client(args)
-    expiring = get_expiring_credentials(hours=2)
+    hours = args.hours
+    expiring = get_expiring_credentials(hours=hours)
 
     if not expiring:
         print("No credentials need refreshing.")
         return
 
+    failures = 0
     for cred in expiring:
         if cred["type"] != "aws":
             print(f"Skipping non-AWS credential: {cred['name']}")
@@ -182,14 +200,16 @@ def cmd_refresh(args):
                 name=cred["name"], types=["aws"], source="tracebit-python",
                 source_type="endpoint", labels=cred.get("labels", {}),
             )
-        except TracebitError as e:
+        except (TracebitError, requests.RequestException) as e:
             print(f"Error refreshing {cred['name']}: {e}", file=sys.stderr)
+            failures += 1
             continue
 
         aws = result.get("aws")
         if not aws:
             print(f"Error: No AWS credentials in refresh response for {cred['name']}.",
                   file=sys.stderr)
+            failures += 1
             continue
 
         deploy_aws_credentials(
@@ -202,7 +222,7 @@ def cmd_refresh(args):
 
         try:
             client.confirm_credentials(aws["awsConfirmationId"])
-        except TracebitError as e:
+        except (TracebitError, requests.RequestException) as e:
             print(f"Warning: Could not confirm refresh for {cred['name']}: {e}",
                   file=sys.stderr)
 
@@ -216,6 +236,10 @@ def cmd_refresh(args):
             "labels": cred.get("labels", {}),
         })
         print(f"  Refreshed. New expiration: {aws['awsExpiration']}")
+
+    if failures:
+        print(f"\n{failures} credential(s) failed to refresh.", file=sys.stderr)
+        sys.exit(1)
 
 
 def cmd_trigger_aws(args):
@@ -303,6 +327,7 @@ def cmd_show(args):
 
 def cmd_remove(args):
     """Remove deployed canary credentials."""
+    client = _get_client(args)
     creds = load_credentials()
 
     if args.name:
@@ -315,6 +340,13 @@ def cmd_remove(args):
         return
 
     for c in matches:
+        # expire server-side
+        try:
+            client.remove_credentials(c["name"], c["type"])
+            print(f"Expired '{c['name']}' ({c['type']}) on Tracebit.")
+        except TracebitError as e:
+            print(f"Warning: Could not expire server-side: {e}", file=sys.stderr)
+
         if c["type"] == "aws":
             remove_aws_credentials(c.get("profile", ""))
             print(f"Removed AWS profile '{c.get('profile')}' from ~/.aws/")
@@ -354,7 +386,9 @@ def main():
                         help="Overwrite existing profile")
 
     # refresh
-    sub.add_parser("refresh", help="Refresh expiring credentials")
+    p_refresh = sub.add_parser("refresh", help="Refresh expiring credentials")
+    p_refresh.add_argument("--hours", type=float, default=13,
+                           help="Refresh credentials expiring within this many hours (default: 13)")
 
     # trigger
     p_trigger = sub.add_parser("trigger", help="Test-fire a canary credential")

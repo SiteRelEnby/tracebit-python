@@ -1,13 +1,39 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tracebit"
+name = "tracebit-python"
 version = "0.1.0"
 description = "CLI for managing Tracebit canary credentials on headless servers"
+readme = "README.md"
 requires-python = ">=3.8"
+license = {text = "Apache-2.0"}
+keywords = [
+    "tracebit", "canary", "honeypot", "aws", "credentials",
+    "security", "detection", "deception",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+]
 dependencies = ["requests>=2.20"]
+
+[project.urls]
+Repository = "https://github.com/SiteRelEnby/tracebit-python"
+Issues = "https://github.com/SiteRelEnby/tracebit-python/issues"
 
 [project.scripts]
 tracebit = "tracebit.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
