@@ -10,6 +10,14 @@ CONFIG_FILE = AWS_DIR / "config"
 
 def _ensure_aws_dir():
     AWS_DIR.mkdir(mode=0o700, exist_ok=True)
+    mode = AWS_DIR.stat().st_mode & 0o777
+    if mode != 0o700:
+        import sys
+        print(
+            f"Warning: ~/.aws/ has permissions {oct(mode)} (expected 0700). "
+            f"Consider running: chmod 700 ~/.aws",
+            file=sys.stderr,
+        )
 
 
 def _read_ini(path):

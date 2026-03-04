@@ -11,8 +11,16 @@ STATE_FILE = STATE_DIR / "state.json"
 def _load_state():
     if not STATE_FILE.exists():
         return {"credentials": []}
-    with open(STATE_FILE) as f:
-        return json.load(f)
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        import sys
+        print(
+            f"Warning: state file {STATE_FILE} is unreadable or corrupt, ignoring.",
+            file=sys.stderr,
+        )
+        return {"credentials": []}
 
 
 def _save_state(state):
@@ -74,7 +82,10 @@ def get_expiring_credentials(hours=2):
         exp = c.get("expiration")
         if not exp:
             continue
-        exp_dt = datetime.fromisoformat(exp.replace("Z", "+00:00"))
+        try:
+            exp_dt = datetime.fromisoformat(exp.replace("Z", "+00:00"))
+        except ValueError:
+            continue
         diff = (exp_dt - now).total_seconds() / 3600
         if diff < hours:
             expiring.append(c)

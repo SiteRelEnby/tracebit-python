@@ -127,3 +127,33 @@ def test_get_already_expired():
     save_credential(make_cred(expiration=past))
     expiring = get_expiring_credentials(hours=2)
     assert len(expiring) == 1
+
+
+def test_corrupt_state_file_returns_empty(tmp_path, monkeypatch):
+    import tracebit.state as state_mod
+    state_file = tmp_path / "state.json"
+    state_file.write_text("not valid json{{{")
+    monkeypatch.setattr(state_mod, "STATE_FILE", state_file)
+    assert load_credentials() == []
+
+
+def test_corrupt_state_file_warns(tmp_path, monkeypatch, capsys):
+    import tracebit.state as state_mod
+    state_file = tmp_path / "state.json"
+    state_file.write_text("not valid json{{{")
+    monkeypatch.setattr(state_mod, "STATE_FILE", state_file)
+    load_credentials()
+    assert "corrupt" in capsys.readouterr().err.lower()
+
+
+def test_bad_expiration_skipped():
+    save_credential(make_cred(expiration="not-a-date"))
+    # should not raise, just skip the bad entry
+    result = get_expiring_credentials(hours=99)
+    assert result == []
+
+
+def test_missing_expiration_skipped():
+    save_credential(make_cred(expiration=None))
+    result = get_expiring_credentials(hours=99)
+    assert result == []

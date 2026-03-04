@@ -124,7 +124,7 @@ def cmd_deploy_aws(args):
             try:
                 client.remove_credentials(old["name"], "aws")
                 _log(args, f"Expired previous canary '{old['name']}' on Tracebit.")
-            except TracebitError:
+            except (TracebitError, requests.RequestException):
                 pass
             remove_credential(old["name"], "aws")
 
@@ -135,7 +135,7 @@ def cmd_deploy_aws(args):
             name=name, types=["aws"], source="tracebit-python",
             source_type="endpoint", labels=labels,
         )
-    except TracebitError as e:
+    except (TracebitError, requests.RequestException) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
@@ -158,7 +158,7 @@ def cmd_deploy_aws(args):
     try:
         client.confirm_credentials(aws["awsConfirmationId"])
         _log(args, "Deployment confirmed with Tracebit.")
-    except TracebitError as e:
+    except (TracebitError, requests.RequestException) as e:
         print(f"Warning: Could not confirm deployment: {e}", file=sys.stderr)
 
     # save state
@@ -360,7 +360,7 @@ def cmd_remove(args):
         try:
             client.remove_credentials(c["name"], c["type"])
             _log(args, f"Expired '{c['name']}' ({c['type']}) on Tracebit.")
-        except TracebitError as e:
+        except (TracebitError, requests.RequestException) as e:
             print(f"Warning: Could not expire server-side: {e}", file=sys.stderr)
 
         if c["type"] == "aws":
@@ -400,7 +400,7 @@ def main():
     p_aws.add_argument("--name", help="Credential name for Tracebit dashboard (default: hostname)")
     p_aws.add_argument("--profile",
                         help="AWS profile name — pick something realistic "
-                             "e.g. 'staging', 'backup', 'legacy-admin' (default: from API)")
+                             "e.g. 'staging', 'backup', 'legacy-admin' (default: staging)")
     p_aws.add_argument("--region", help="AWS region (default: from API)")
     p_aws.add_argument("--labels", nargs="*", metavar="KEY=VALUE",
                         help="Labels as key=value pairs")

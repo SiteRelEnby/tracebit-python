@@ -123,3 +123,18 @@ def test_get_aws_credentials():
 
 def test_get_aws_credentials_missing():
     assert aws_mod.get_aws_credentials("missing") is None
+
+
+def test_permissive_aws_dir_warns(tmp_path, monkeypatch, capsys):
+    aws_dir = tmp_path / ".aws"
+    aws_dir.mkdir(mode=0o755)
+    monkeypatch.setattr(aws_mod, "AWS_DIR", aws_dir)
+    monkeypatch.setattr(aws_mod, "CREDENTIALS_FILE", aws_dir / "credentials")
+    monkeypatch.setattr(aws_mod, "CONFIG_FILE", aws_dir / "config")
+    deploy()
+    assert "chmod 700" in capsys.readouterr().err
+
+
+def test_correct_aws_dir_no_warning(capsys):
+    deploy()
+    assert capsys.readouterr().err == ""
