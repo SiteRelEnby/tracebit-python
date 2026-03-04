@@ -55,3 +55,11 @@ class TracebitClient:
                 f"Confirmation ID {confirmation_id} not found."
             )
         self._check(resp, "Confirm credentials")
+
+    def remove_credentials(self, name, cred_type="aws"):
+        """Notify Tracebit to expire credentials server-side."""
+        resp = self.session.post(
+            f"{self.base_url}/api/_internal/v1/cli/remove",
+            json={"name": name, "type": cred_type},
+        )
+        self._check(resp, "Remove credentials")
