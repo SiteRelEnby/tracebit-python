@@ -1,8 +1,15 @@
+import sys
+
+if sys.version_info < (3, 8):
+    sys.exit(
+        f"Error: tracebit requires Python 3.8 or later "
+        f"(you have {sys.version.split()[0]}). Please upgrade."
+    )
+
 import argparse
 import json
 import socket
 import subprocess
-import sys
 from datetime import datetime, timezone
 
 import requests
