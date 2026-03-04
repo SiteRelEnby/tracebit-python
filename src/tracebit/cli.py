@@ -194,7 +194,14 @@ def cmd_refresh(args):
             print(f"Skipping non-AWS credential: {cred['name']}")
             continue
 
-        print(f"Refreshing AWS credential '{cred['name']}'...")
+        exp = cred.get("expiration", "")
+        try:
+            exp_dt = datetime.fromisoformat(exp.replace("Z", "+00:00"))
+            remaining = (exp_dt - datetime.now(timezone.utc)).total_seconds() / 3600
+            print(f"Refreshing AWS credential '{cred['name']}' "
+                  f"(expires in {remaining:.1f}h, threshold {hours}h)...")
+        except (ValueError, TypeError):
+            print(f"Refreshing AWS credential '{cred['name']}'...")
         try:
             result = client.issue_credentials(
                 name=cred["name"], types=["aws"], source="tracebit-python",
@@ -355,10 +362,14 @@ def cmd_remove(args):
 
 
 def main():
+    from . import __version__
+
     parser = argparse.ArgumentParser(
         prog="tracebit",
         description="Manage Tracebit canary credentials",
     )
+    parser.add_argument("--version", action="version",
+                        version=f"%(prog)s {__version__}")
     parser.add_argument("--token", help="API token (overrides env/config)")
     parser.add_argument("--base-url", help="Override Tracebit API base URL")
     parser.add_argument("--json", dest="json_output", action="store_true",
@@ -387,8 +398,8 @@ def main():
 
     # refresh
     p_refresh = sub.add_parser("refresh", help="Refresh expiring credentials")
-    p_refresh.add_argument("--hours", type=float, default=13,
-                           help="Refresh credentials expiring within this many hours (default: 13)")
+    p_refresh.add_argument("--hours", type=float, default=2,
+                           help="Refresh credentials expiring within this many hours (default: 2)")
 
     # trigger
     p_trigger = sub.add_parser("trigger", help="Test-fire a canary credential")

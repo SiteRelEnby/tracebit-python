@@ -71,11 +71,11 @@ see an alert on the Tracebit dashboard within a few minutes.
 
 ### 5. Keep credentials fresh
 
-Canary credentials expire after ~24 hours. Set up a cron job to refresh them:
+Canary credentials expire after ~12 hours. Set up a cron job to refresh them:
 
 ```bash
 # crontab -e
-0 */12 * * * /path/to/tracebit refresh
+0 */6 * * * /path/to/tracebit refresh --hours 4
 ```
 
 ## Commands
@@ -107,10 +107,7 @@ from cron.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--hours` | `13` | Refresh credentials expiring within this many hours |
-
-With 24h credentials and a 12h cron, the default of 13 hours ensures every
-cron run refreshes credentials.
+| `--hours` | `2` | Refresh credentials expiring within this many hours |
 
 ### `tracebit trigger aws`
 
