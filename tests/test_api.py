@@ -39,7 +39,7 @@ def test_issue_credentials_sends_correct_body(client):
         client.issue_credentials(name="myserver", types=["aws"], labels={"env": "prod"})
     body = m.call_args.kwargs["json"]
     assert body["name"] == "myserver"
-    assert body["credentialTypes"] == ["aws"]
+    assert body["types"] == ["aws"]
     assert body["source"] == "tracebit-python"
     assert {"name": "env", "value": "prod"} in body["labels"]
 

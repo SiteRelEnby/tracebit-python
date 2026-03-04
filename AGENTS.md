@@ -34,7 +34,7 @@ The tool writes to `~/.aws/credentials` which may contain real AWS credentials. 
 
 ### Match the official CLI's API contract
 
-The C# CLI at [tracebit-com/tracebit-community-cli](https://github.com/tracebit-com/tracebit-community-cli) is the reference implementation. Use the same field names (`credentialTypes`, `sourceType`, etc.), the same endpoints, and the same confirmation flow. If the API changes, check the official CLI first.
+The C# CLI at [tracebit-com/tracebit-community-cli](https://github.com/tracebit-com/tracebit-community-cli) is the reference implementation. Use the same field names (`types`, `sourceType`, etc.), the same endpoints, and the same confirmation flow. If the API changes, check the official CLI first.
 
 ### Profile names should look realistic
 
