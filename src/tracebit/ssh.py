@@ -58,11 +58,26 @@ def _remove_host_block(text, ssh_host):
     return "".join(result)
 
 
+def validate_ssh_host(ssh_host):
+    """Raise ValueError if ssh_host contains characters unsafe for ssh config."""
+    if any(c in str(ssh_host) for c in ("\n", "\r", " ", "\t")):
+        raise ValueError(
+            f"Invalid --ssh-host value {ssh_host!r}: "
+            f"must not contain whitespace or newlines."
+        )
+
+
 def write_ssh_config(ssh_host, key_path, ssh_ip, config_file=None):
     """Append a Host block to an ssh config file for the canary."""
+    validate_ssh_host(ssh_host)
     if config_file is None:
         config_file = SSH_CONFIG
     config_file = Path(config_file)
+
+    if not config_file.parent.exists():
+        raise OSError(
+            f"Parent directory of ssh config file does not exist: {config_file.parent}"
+        )
 
     existing = config_file.read_text() if config_file.exists() else ""
     cleaned = _remove_host_block(existing, ssh_host).rstrip("\n")

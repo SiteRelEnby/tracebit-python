@@ -82,6 +82,27 @@ def cfg(tmp_path):
     return tmp_path / ".ssh" / "config"
 
 
+def test_validate_ssh_host_rejects_space():
+    with pytest.raises(ValueError, match="whitespace"):
+        ssh_mod.validate_ssh_host("bad host")
+
+
+def test_validate_ssh_host_rejects_newline():
+    with pytest.raises(ValueError, match="whitespace"):
+        ssh_mod.validate_ssh_host("bad\nhost")
+
+
+def test_validate_ssh_host_accepts_valid():
+    ssh_mod.validate_ssh_host("backup-server.internal")  # should not raise
+    ssh_mod.validate_ssh_host("1.2.3.4")
+
+
+def test_write_config_missing_parent_raises(tmp_path):
+    cf = tmp_path / "no-such-dir" / "config"
+    with pytest.raises(OSError, match="does not exist"):
+        ssh_mod.write_ssh_config("backup-server.internal", "/key", "1.2.3.4", config_file=cf)
+
+
 def test_write_config_creates_host_block(tmp_path):
     cf = cfg(tmp_path)
     cf.parent.mkdir(parents=True)

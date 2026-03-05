@@ -19,7 +19,7 @@ from .aws import deploy_aws_credentials, remove_aws_credentials, profile_exists
 from .config import load_token, save_token
 from .ssh import (
     deploy_ssh_key, remove_ssh_key, key_exists, trigger_ssh,
-    write_ssh_config, remove_ssh_config,
+    write_ssh_config, remove_ssh_config, validate_ssh_host,
 )
 from .state import (
     save_credential,
@@ -204,6 +204,26 @@ def cmd_deploy_ssh(args):
     name = args.name or socket.gethostname()
     labels = _parse_labels(args.labels)
 
+    # validate --ssh-host early before any API calls
+    if args.ssh_host:
+        try:
+            validate_ssh_host(args.ssh_host)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+        existing_host = next(
+            (c for c in load_credentials()
+             if c["type"] == "ssh" and c.get("ssh_host") == args.ssh_host),
+            None,
+        )
+        if existing_host and not args.force:
+            print(
+                f"Error: SSH host '{args.ssh_host}' is already used by canary "
+                f"'{existing_host['name']}'. Use --force to replace it.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
     # get default key filename from API if not specified
     key_filename = args.key_file
     if not key_filename:
@@ -271,8 +291,12 @@ def cmd_deploy_ssh(args):
     _log(args, f"Private key written to {key_path}")
 
     if ssh_host:
-        write_ssh_config(ssh_host, key_path, ssh_ip, config_file)
-        _log(args, f"SSH config entry written for host '{ssh_host}'")
+        try:
+            write_ssh_config(ssh_host, key_path, ssh_ip, config_file)
+            _log(args, f"SSH config entry written for host '{ssh_host}'")
+        except OSError as e:
+            print(f"Error: Could not write SSH config: {e}", file=sys.stderr)
+            sys.exit(1)
 
     try:
         client.confirm_credentials(ssh["sshConfirmationId"])
@@ -420,7 +444,11 @@ def cmd_refresh(args):
             config_file = cred.get("ssh_config_file")
             key_path = deploy_ssh_key(cred["key_filename"], ssh["sshPrivateKey"])
             if ssh_host:
-                write_ssh_config(ssh_host, key_path, new_ip, config_file)
+                try:
+                    write_ssh_config(ssh_host, key_path, new_ip, config_file)
+                except OSError as e:
+                    print(f"Warning: Could not update SSH config for {cred['name']}: {e}",
+                          file=sys.stderr)
             try:
                 client.confirm_credentials(ssh["sshConfirmationId"])
             except (TracebitError, requests.RequestException) as e:
