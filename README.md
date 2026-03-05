@@ -49,33 +49,46 @@ Or use an environment variable:
 export TRACEBIT_API_TOKEN=your-token-here
 ```
 
-### 3. Deploy a canary
+### 3. Deploy canaries
+
+**AWS credentials:**
 
 ```bash
 tracebit deploy aws --profile staging
 ```
 
-This issues canary AWS credentials from Tracebit, writes them to
-`~/.aws/credentials` under the specified profile, and confirms the
-deployment. If anyone (or anything) uses these credentials, Tracebit
-fires an alert.
+Writes canary AWS credentials to `~/.aws/credentials` under the given profile.
+Any AWS API call using these credentials triggers an alert.
+
+**SSH key:**
+
+```bash
+tracebit deploy ssh --key-file id_backup --ssh-host backup-server.internal
+```
+
+Writes a canary SSH private key to `~/.ssh/id_backup` and adds a `Host` block
+to `~/.ssh/config` pointing `backup-server.internal` at Tracebit's honeypot.
+Any SSH connection attempt using this key triggers an alert.
+
+Choose names that look realistic to an attacker — `staging`, `id_backup`,
+`backup-server.internal`. The whole point is that they look like real credentials.
 
 ### 4. Test it
 
 ```bash
-tracebit trigger aws
+tracebit trigger aws    # uses aws sts get-caller-identity
+tracebit trigger ssh    # connects to Tracebit's honeypot
 ```
 
-Runs `aws sts get-caller-identity` against the canary profile. You should
-see an alert on the Tracebit dashboard within a few minutes.
+You should see an alert on the Tracebit dashboard within a few minutes.
 
 ### 5. Keep credentials fresh
 
-Canary credentials expire after ~12 hours. Set up a cron job to refresh them:
+Canary credentials expire after ~12 hours. Set up a cron job:
 
 ```bash
-# crontab -e
-0 */6 * * * /path/to/tracebit refresh --hours 4
+tracebit install-cron           # prints a ready-to-paste crontab line
+tracebit install-cron --install # adds it to your crontab automatically
 ```
 
 ## Commands
@@ -97,8 +110,25 @@ Issue and deploy canary AWS credentials.
 | `--labels` | | Metadata as `key=value` pairs |
 | `--force` | | Replace existing profile (expires old canary first) |
 
-Choose a realistic profile name — `staging`, `backup`, `legacy-admin`, etc.
-The whole point is for these to look like real credentials to an attacker.
+### `tracebit deploy ssh`
+
+Issue and deploy a canary SSH private key.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--name` | hostname | Credential name (shown on Tracebit dashboard) |
+| `--key-file` | from API | Key filename in `~/.ssh/` |
+| `--ssh-host` | honeypot IP | Hostname alias for `~/.ssh/config` Host entry |
+| `--ssh-config-file` | `~/.ssh/config` | SSH config file to write Host entry into |
+| `--labels` | | Metadata as `key=value` pairs |
+| `--force` | | Replace existing key/config entry |
+
+The `--ssh-host` alias is what makes the canary effective: an attacker finding
+`~/.ssh/config` with `Host backup-server.internal` pointing somewhere will try
+to connect there, firing the alert. If omitted, the honeypot IP is used directly.
+
+Use `--ssh-config-file` if your `~/.ssh/config` is tracked in git and you keep
+local overrides in a separate file (e.g. `~/.ssh/config.local`).
 
 ### `tracebit refresh`
 
@@ -111,8 +141,16 @@ from cron.
 
 ### `tracebit trigger aws`
 
-Test-fire a canary by calling `aws sts get-caller-identity` with the canary
+Test-fire an AWS canary by calling `aws sts get-caller-identity` with the canary
 profile. Requires the AWS CLI to be installed.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--name` | first found | Credential name to trigger |
+
+### `tracebit trigger ssh`
+
+Test-fire an SSH canary by connecting to Tracebit's honeypot with the canary key.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -120,7 +158,7 @@ profile. Requires the AWS CLI to be installed.
 
 ### `tracebit show`
 
-Display deployed canary credentials, their profiles, and expiration status.
+Display deployed canary credentials, their profiles/keys, and expiration status.
 
 ### `tracebit remove`
 
@@ -130,6 +168,16 @@ Remove canary credentials locally and expire them on Tracebit's server.
 |--------|---------|-------------|
 | `--name` | all | Name of credential to remove |
 
+### `tracebit install-cron`
+
+Print or install a cron job that runs `tracebit refresh --quiet` on a schedule.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--schedule` | `*/30 * * * *` | Cron schedule expression |
+| `--install` | | Add entry to current user's crontab |
+| `--system` | | Write `/etc/cron.d/tracebit` (requires root) |
+
 ## Global Options
 
 | Option | Description |
@@ -137,6 +185,7 @@ Remove canary credentials locally and expire them on Tracebit's server.
 | `--token TOKEN` | API token (overrides env var and config file) |
 | `--base-url URL` | Override Tracebit API URL |
 | `--json` | JSON output (where supported) |
+| `-q / --quiet` | Suppress informational output (errors still go to stderr) |
 
 ## Token Resolution
 
@@ -148,22 +197,32 @@ The API token is resolved in this order:
 
 ## How It Works
 
+**AWS canaries:**
+
 1. **Issue** — requests canary AWS credentials from the Tracebit API
 2. **Deploy** — writes them to `~/.aws/credentials` and `~/.aws/config`
-   under the chosen profile name
-3. **Confirm** — tells Tracebit the credentials were deployed, so it starts
-   monitoring for usage
-4. **Alert** — any AWS API call using these credentials triggers a detection
-   on the Tracebit dashboard
+3. **Confirm** — tells Tracebit the credentials are live
+4. **Alert** — any AWS API call using these credentials fires a detection
 
 The credentials have an explicit deny policy — they can't actually do anything
-in AWS. But any attempt to use them (by an attacker who found them on disk,
-in a config file, etc.) is logged and alerted on.
+in AWS. But any attempt to use them is logged and alerted on.
+
+**SSH canaries:**
+
+1. **Issue** — requests a canary SSH private key from the Tracebit API
+2. **Deploy** — writes the key to `~/.ssh/<key-file>` and adds a `Host` block
+   to `~/.ssh/config` pointing the chosen hostname at Tracebit's honeypot
+3. **Confirm** — tells Tracebit the key is deployed
+4. **Alert** — any SSH connection attempt presenting this key to the honeypot
+   fires a detection
 
 ## File Permissions
 
 - `~/.aws/` directory: `0700`
 - `~/.aws/credentials`, `~/.aws/config`: `0600`
+- `~/.ssh/` directory: `0700`
+- `~/.ssh/<key-file>`: `0600`
+- `~/.ssh/config`: `0600`
 - `~/.config/tracebit/token`: `0600`
 - `~/.config/tracebit/state.json`: `0600`
 

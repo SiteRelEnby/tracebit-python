@@ -594,6 +594,54 @@ def cmd_remove(args):
         _log(args, f"Removed credential '{c['name']}' ({c['type']}) from state.")
 
 
+def cmd_install_cron(args):
+    """Print or install a crontab entry for tracebit refresh."""
+    import shutil
+
+    tracebit_bin = shutil.which("tracebit") or sys.argv[0]
+    schedule = args.schedule
+    line = f"{schedule} {tracebit_bin} refresh --quiet"
+
+    if args.system:
+        cron_file = "/etc/cron.d/tracebit"
+        entry = f"{schedule} root {tracebit_bin} refresh --quiet\n"
+        try:
+            with open(cron_file, "w") as f:
+                f.write("# Tracebit canary credential refresh\n")
+                f.write(entry)
+            print(f"Wrote {cron_file}")
+        except OSError as e:
+            print(f"Error: Could not write {cron_file}: {e}", file=sys.stderr)
+            sys.exit(1)
+    elif args.install:
+        import subprocess
+        try:
+            existing = subprocess.run(
+                ["crontab", "-l"], capture_output=True, text=True,
+            )
+            current = existing.stdout if existing.returncode == 0 else ""
+            if tracebit_bin in current and "refresh" in current:
+                print("A tracebit refresh entry already exists in your crontab:")
+                for ln in current.splitlines():
+                    if "tracebit" in ln and "refresh" in ln:
+                        print(f"  {ln}")
+                print("Remove it manually first if you want to replace it.")
+                sys.exit(1)
+            new_crontab = current.rstrip("\n") + ("\n" if current else "") + line + "\n"
+            subprocess.run(["crontab", "-"], input=new_crontab, text=True, check=True)
+            print(f"Installed crontab entry: {line}")
+        except FileNotFoundError:
+            print("Error: 'crontab' not found in PATH.", file=sys.stderr)
+            sys.exit(1)
+        except subprocess.CalledProcessError as e:
+            print(f"Error: crontab installation failed: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        print("Add this line to your crontab (crontab -e):\n")
+        print(f"  {line}\n")
+        print("Or run with --install to add it automatically.")
+
+
 def main():
     from . import __version__
 
@@ -668,6 +716,15 @@ def main():
     p_remove = sub.add_parser("remove", help="Remove deployed credentials")
     p_remove.add_argument("--name", help="Name of credential to remove (all if omitted)")
 
+    # install-cron
+    p_cron = sub.add_parser("install-cron", help="Print or install a cron job for refresh")
+    p_cron.add_argument("--schedule", default="*/30 * * * *",
+                        help="Cron schedule expression (default: '*/30 * * * *')")
+    p_cron.add_argument("--install", action="store_true",
+                        help="Add entry to current user's crontab")
+    p_cron.add_argument("--system", action="store_true",
+                        help="Write /etc/cron.d/tracebit (requires root)")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -698,6 +755,8 @@ def main():
         cmd_show(args)
     elif args.command == "remove":
         cmd_remove(args)
+    elif args.command == "install-cron":
+        cmd_install_cron(args)
 
 
 if __name__ == "__main__":
