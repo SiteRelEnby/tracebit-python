@@ -62,6 +62,7 @@ src/tracebit/
 ├── api.py          # TracebitClient — API calls
 ├── aws.py          # ~/.aws/ credential file read/write
 ├── config.py       # Token loading (env var / config file)
+├── ssh.py          # ~/.ssh/ key and config file read/write
 └── state.py        # Local state tracking (deployed credentials)
 ```
 
