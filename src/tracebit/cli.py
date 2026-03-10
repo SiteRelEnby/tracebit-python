@@ -559,6 +559,27 @@ def cmd_show(args):
         _log(args, "")
 
 
+def _remove_one(args, client, c):
+    """Expire and remove a single credential. Shared by remove and cleanup."""
+    try:
+        client.remove_credentials(c["name"], c["type"])
+        _log(args, f"Expired '{c['name']}' ({c['type']}) on Tracebit.")
+    except (TracebitError, requests.RequestException) as e:
+        print(f"Warning: Could not expire server-side: {e}", file=sys.stderr)
+
+    if c["type"] == "aws":
+        remove_aws_credentials(c.get("profile", ""))
+        _log(args, f"Removed AWS profile '{c.get('profile')}' from ~/.aws/")
+    elif c["type"] == "ssh":
+        remove_ssh_key(c.get("key_filename", ""))
+        _log(args, f"Removed SSH key '~/.ssh/{c.get('key_filename')}' from disk")
+        if c.get("ssh_host"):
+            remove_ssh_config(c["ssh_host"], c.get("ssh_config_file"))
+            _log(args, f"Removed SSH config entry for host '{c['ssh_host']}'")
+    remove_credential(c["name"], c["type"])
+    _log(args, f"Removed credential '{c['name']}' ({c['type']}) from state.")
+
+
 def cmd_remove(args):
     """Remove deployed canary credentials."""
     client = _get_client(args)
@@ -574,24 +595,32 @@ def cmd_remove(args):
         return
 
     for c in matches:
-        # expire server-side
-        try:
-            client.remove_credentials(c["name"], c["type"])
-            _log(args, f"Expired '{c['name']}' ({c['type']}) on Tracebit.")
-        except (TracebitError, requests.RequestException) as e:
-            print(f"Warning: Could not expire server-side: {e}", file=sys.stderr)
+        _remove_one(args, client, c)
 
-        if c["type"] == "aws":
-            remove_aws_credentials(c.get("profile", ""))
-            _log(args, f"Removed AWS profile '{c.get('profile')}' from ~/.aws/")
-        elif c["type"] == "ssh":
-            remove_ssh_key(c.get("key_filename", ""))
-            _log(args, f"Removed SSH key '~/.ssh/{c.get('key_filename')}' from disk")
-            if c.get("ssh_host"):
-                remove_ssh_config(c["ssh_host"], c.get("ssh_config_file"))
-                _log(args, f"Removed SSH config entry for host '{c['ssh_host']}'")
-        remove_credential(c["name"], c["type"])
-        _log(args, f"Removed credential '{c['name']}' ({c['type']}) from state.")
+
+def cmd_cleanup(args):
+    """Remove credentials that have already expired."""
+    client = _get_client(args)
+    now = datetime.now(timezone.utc)
+    creds = load_credentials()
+
+    expired = []
+    for c in creds:
+        exp = c.get("expiration", "")
+        try:
+            exp_dt = datetime.fromisoformat(exp.replace("Z", "+00:00"))
+            if exp_dt < now:
+                expired.append(c)
+        except (ValueError, TypeError):
+            pass  # missing/bad expiration — skip, don't clean up blindly
+
+    if not expired:
+        _log(args, "No expired credentials found.")
+        return
+
+    for c in expired:
+        _log(args, f"Cleaning up expired credential '{c['name']}' ({c['type']})...")
+        _remove_one(args, client, c)
 
 
 def cmd_install_cron(args):
@@ -716,6 +745,9 @@ def main():
     p_remove = sub.add_parser("remove", help="Remove deployed credentials")
     p_remove.add_argument("--name", help="Name of credential to remove (all if omitted)")
 
+    # cleanup
+    sub.add_parser("cleanup", help="Remove already-expired credentials")
+
     # install-cron
     p_cron = sub.add_parser("install-cron", help="Print or install a cron job for refresh")
     p_cron.add_argument("--schedule", default="*/30 * * * *",
@@ -755,6 +787,8 @@ def main():
         cmd_show(args)
     elif args.command == "remove":
         cmd_remove(args)
+    elif args.command == "cleanup":
+        cmd_cleanup(args)
     elif args.command == "install-cron":
         cmd_install_cron(args)
 

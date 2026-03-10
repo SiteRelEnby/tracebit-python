@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+- `cleanup` command — removes already-expired credentials (local files + state)
 
 ## [0.1.2] - 2026-03-04
 
