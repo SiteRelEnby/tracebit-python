@@ -689,9 +689,14 @@ def main():
 
     sub = parser.add_subparsers(dest="command")
 
+    def _add_quiet(p):
+        p.add_argument("-q", "--quiet", action="store_true", default=argparse.SUPPRESS,
+                       help="Suppress informational output (errors still print to stderr)")
+
     # configure
     p_conf = sub.add_parser("configure", help="Save API token")
     p_conf.add_argument("token_value", nargs="?", help="Token to save")
+    _add_quiet(p_conf)
 
     # deploy
     p_deploy = sub.add_parser("deploy", help="Deploy canary credentials")
@@ -707,6 +712,7 @@ def main():
                         help="Labels as key=value pairs")
     p_aws.add_argument("--force", action="store_true",
                         help="Overwrite existing profile")
+    _add_quiet(p_aws)
 
     p_ssh = deploy_sub.add_parser("ssh", help="Deploy SSH canary key")
     p_ssh.add_argument("--name", help="Credential name for Tracebit dashboard (default: hostname)")
@@ -723,30 +729,37 @@ def main():
                        help="Labels as key=value pairs")
     p_ssh.add_argument("--force", action="store_true",
                        help="Overwrite existing key file")
+    _add_quiet(p_ssh)
 
     # refresh
     p_refresh = sub.add_parser("refresh", help="Refresh expiring credentials")
     p_refresh.add_argument("--hours", type=float, default=2,
                            help="Refresh credentials expiring within this many hours (default: 2)")
+    _add_quiet(p_refresh)
 
     # trigger
     p_trigger = sub.add_parser("trigger", help="Test-fire a canary credential")
     trigger_sub = p_trigger.add_subparsers(dest="trigger_type")
     p_trig_aws = trigger_sub.add_parser("aws", help="Trigger AWS canary")
     p_trig_aws.add_argument("--name", help="Credential name to trigger")
+    _add_quiet(p_trig_aws)
 
     p_trig_ssh = trigger_sub.add_parser("ssh", help="Trigger SSH canary")
     p_trig_ssh.add_argument("--name", help="Credential name to trigger")
+    _add_quiet(p_trig_ssh)
 
     # show
-    sub.add_parser("show", help="Show deployed credentials")
+    p_show = sub.add_parser("show", help="Show deployed credentials")
+    _add_quiet(p_show)
 
     # remove
     p_remove = sub.add_parser("remove", help="Remove deployed credentials")
     p_remove.add_argument("--name", help="Name of credential to remove (all if omitted)")
+    _add_quiet(p_remove)
 
     # cleanup
-    sub.add_parser("cleanup", help="Remove already-expired credentials")
+    p_cleanup = sub.add_parser("cleanup", help="Remove already-expired credentials")
+    _add_quiet(p_cleanup)
 
     # install-cron
     p_cron = sub.add_parser("install-cron", help="Print or install a cron job for refresh")

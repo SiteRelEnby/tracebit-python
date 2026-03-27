@@ -6,9 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-- `cleanup` command — removes already-expired credentials (local files + state)
 
-## [0.1.2] - 2026-03-04
+## [0.1.2] - 2026-03-11
 
 ### Added
 - SSH canary support: `deploy ssh` and `trigger ssh` subcommands
@@ -18,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--ssh-config-file` flag on `deploy ssh` for split ssh config setups
 - `install-cron` command — prints or installs a crontab entry for unattended refresh
   (`--install` for user crontab, `--system` for `/etc/cron.d/`, `--schedule` to override)
+- `cleanup` command — removes already-expired credentials (local files + state)
+- `-q`/`--quiet` now accepted after the subcommand as well as before it
 - Python version check: friendly error message if running Python < 3.8
 
 ### Fixed
